@@ -37,39 +37,22 @@ echo [1/7] Checking Python version...
 echo.
 
 set PYTHON_EXE=
-set PYTHON_OK=0
 
-:: Try 'python' first
-python --version >nul 2>&1
-if %errorlevel% == 0 (
-    for /f "tokens=2" %%V in ('python --version 2^>^&1') do set PY_VER=%%V
-    call :check_version "%PY_VER%"
-    if !VERSION_OK! == 1 (
-        set PYTHON_EXE=python
-        set PYTHON_OK=1
-    )
-)
-
-:: Try 'python3' if 'python' didn't work
-if "%PYTHON_OK%" == "0" (
-    python3 --version >nul 2>&1
-    if %errorlevel% == 0 (
-        for /f "tokens=2" %%V in ('python3 --version 2^>^&1') do set PY_VER=%%V
-        call :check_version "%PY_VER%"
-        if !VERSION_OK! == 1 (
-            set PYTHON_EXE=python3
-            set PYTHON_OK=1
-        )
+:: Try each candidate -- use Python itself to verify version >= 3.10
+for %%P in (python python3 py) do (
+    if "!PYTHON_EXE!" == "" (
+        %%P -c "import sys; exit(0 if sys.version_info>=(3,10) else 1)" >nul 2>&1
+        if !errorlevel! == 0 set PYTHON_EXE=%%P
     )
 )
 
 :: Python not found or version too old -- try winget install
-if "%PYTHON_OK%" == "0" (
+if "!PYTHON_EXE!" == "" (
     echo  Python 3.10+ not found. Attempting automatic install via winget...
     echo  (Requires Windows 10 version 1709 or later)
     echo.
     winget install --id Python.Python.3.11 --source winget --accept-package-agreements --accept-source-agreements
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo.
         color 0C
         echo  [!] winget installation failed.
@@ -86,19 +69,15 @@ if "%PYTHON_OK%" == "0" (
         goto :fatal_pause
     )
 
-    :: Refresh PATH so newly installed python is found
-    :: Re-check after install
-    python --version >nul 2>&1
-    if %errorlevel% == 0 (
-        for /f "tokens=2" %%V in ('python --version 2^>^&1') do set PY_VER=%%V
-        call :check_version "%PY_VER%"
-        if !VERSION_OK! == 1 (
-            set PYTHON_EXE=python
-            set PYTHON_OK=1
+    :: Refresh PATH after winget install and re-check
+    for %%P in (python python3 py) do (
+        if "!PYTHON_EXE!" == "" (
+            %%P -c "import sys; exit(0 if sys.version_info>=(3,10) else 1)" >nul 2>&1
+            if !errorlevel! == 0 set PYTHON_EXE=%%P
         )
     )
 
-    if "%PYTHON_OK%" == "0" (
+    if "!PYTHON_EXE!" == "" (
         color 0C
         echo.
         echo  [!] Python was installed but could not be detected automatically.
@@ -109,7 +88,8 @@ if "%PYTHON_OK%" == "0" (
     )
 )
 
-echo  [OK] Python %PY_VER% found  (%PYTHON_EXE%)
+for /f "tokens=2" %%V in ('!PYTHON_EXE! --version 2^>^&1') do set PY_VER=%%V
+echo  [OK] Python !PY_VER! found  (!PYTHON_EXE!)
 
 :: ============================================================
 ::  STEP 2 -- Create virtual environment
@@ -297,29 +277,6 @@ echo.
 echo  Enjoy a natural, flattering 50mm-equivalent webcam view!
 echo.
 pause
-exit /b 0
-
-:: ============================================================
-::  SUBROUTINE: check_version
-::  Arg 1: version string like "3.11.2"
-::  Sets VERSION_OK=1 if major>=3 and minor>=10
-:: ============================================================
-:check_version
-setlocal enabledelayedexpansion
-set VER_STR=%~1
-:: Strip leading 'v' if present
-if "%VER_STR:~0,1%" == "v" set VER_STR=%VER_STR:~1%
-
-for /f "tokens=1,2 delims=." %%A in ("%VER_STR%") do (
-    set VER_MAJOR=%%A
-    set VER_MINOR=%%B
-)
-
-set /a CHECK=0
-if !VER_MAJOR! GTR 3 set /a CHECK=1
-if !VER_MAJOR! EQU 3 if !VER_MINOR! GEQ 10 set /a CHECK=1
-
-endlocal & set VERSION_OK=%CHECK%
 exit /b 0
 
 :: ============================================================

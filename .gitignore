@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.DS_Store
+selfie_segmenter.tflite
+.claude/
+*.egg
+dist/
+build/

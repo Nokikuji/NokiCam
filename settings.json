@@ -1,0 +1,10 @@
+{
+  "zoom": 21,
+  "dist": 15,
+  "cam_index": 0,
+  "autostart": false,
+  "bg_mode": 3,
+  "bg_blur": 21,
+  "bg_file": "/home/nokikuji/Pictures/hatsune-miku-miku.gif",
+  "bg_invert": false
+}

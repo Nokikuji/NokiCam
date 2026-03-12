@@ -39,55 +39,44 @@ echo.
 set PYTHON_EXE=
 
 :: Try each candidate -- use Python itself to verify version >= 3.10
-for %%P in (python python3 py) do (
-    if "!PYTHON_EXE!" == "" (
-        %%P -c "import sys; exit(0 if sys.version_info>=(3,10) else 1)" >nul 2>&1
-        if !errorlevel! == 0 set PYTHON_EXE=%%P
-    )
-)
+call :find_python
+if "!PYTHON_EXE!" neq "" goto :python_found
 
-:: Python not found or version too old -- try winget install
-if "!PYTHON_EXE!" == "" (
-    echo  Python 3.10+ not found. Attempting automatic install via winget...
-    echo  (Requires Windows 10 version 1709 or later)
+:: Python not found or version too old -- install via winget
+echo  Python 3.10+ not found. Attempting automatic install via winget...
+echo  (Requires Windows 10 version 1709 or later)
+echo.
+winget install --id Python.Python.3.11 --source winget --accept-package-agreements --accept-source-agreements
+if !errorlevel! neq 0 (
     echo.
-    winget install --id Python.Python.3.11 --source winget --accept-package-agreements --accept-source-agreements
-    if !errorlevel! neq 0 (
-        echo.
-        color 0C
-        echo  [!] winget installation failed.
-        echo.
-        echo  Please install Python manually:
-        echo    1. Open this link in your browser:
-        echo       https://www.python.org/downloads/
-        echo    2. Download Python 3.11 (or later) for Windows.
-        echo    3. Run the installer.
-        echo       IMPORTANT: Check "Add Python to PATH" on the first screen!
-        echo    4. Re-run this setup file after installing.
-        echo.
-        start https://www.python.org/downloads/
-        goto :fatal_pause
-    )
-
-    :: Refresh PATH after winget install and re-check
-    for %%P in (python python3 py) do (
-        if "!PYTHON_EXE!" == "" (
-            %%P -c "import sys; exit(0 if sys.version_info>=(3,10) else 1)" >nul 2>&1
-            if !errorlevel! == 0 set PYTHON_EXE=%%P
-        )
-    )
-
-    if "!PYTHON_EXE!" == "" (
-        color 0C
-        echo.
-        echo  [!] Python was installed but could not be detected automatically.
-        echo      This usually means the PATH was not updated yet.
-        echo.
-        echo  Please close this window and re-run setup_windows.bat.
-        goto :fatal_pause
-    )
+    color 0C
+    echo  [!] winget installation failed.
+    echo.
+    echo  Please install Python manually:
+    echo    1. Open this link in your browser:
+    echo       https://www.python.org/downloads/
+    echo    2. Download Python 3.11 (or later) for Windows.
+    echo    3. Run the installer.
+    echo       IMPORTANT: Check "Add Python to PATH" on the first screen!
+    echo    4. Re-run this setup file after installing.
+    echo.
+    start https://www.python.org/downloads/
+    goto :fatal_pause
 )
 
+:: Refresh PATH after install and re-check
+call :find_python
+if "!PYTHON_EXE!" == "" (
+    color 0C
+    echo.
+    echo  [!] Python was installed but could not be detected automatically.
+    echo      This usually means the PATH was not updated yet.
+    echo.
+    echo  Please close this window and re-run setup_windows.bat.
+    goto :fatal_pause
+)
+
+:python_found
 for /f "tokens=2" %%V in ('!PYTHON_EXE! --version 2^>^&1') do set PY_VER=%%V
 echo  [OK] Python !PY_VER! found  (!PYTHON_EXE!)
 
@@ -277,6 +266,19 @@ echo.
 echo  Enjoy a natural, flattering 50mm-equivalent webcam view!
 echo.
 pause
+exit /b 0
+
+:: ============================================================
+::  SUBROUTINE: find_python
+::  Tries python, python3, py -- sets PYTHON_EXE to first that works >= 3.10
+:: ============================================================
+:find_python
+for %%P in (python python3 py) do (
+    if "!PYTHON_EXE!" == "" (
+        %%P -c "import sys; exit(0 if sys.version_info>=(3,10) else 1)" >nul 2>&1
+        if !errorlevel! == 0 set PYTHON_EXE=%%P
+    )
+)
 exit /b 0
 
 :: ============================================================

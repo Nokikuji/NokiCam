@@ -234,10 +234,13 @@ function Collapse-Log {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
-# -- Run subprocess with live log output --------------------------------------
+# -- Run subprocess with live log output (async, non-blocking) ----------------
 function Invoke-Setup([string]$Exe, [string]$CmdArgs) {
     Write-Log ""
     Write-Log "> $Exe $CmdArgs"
+
+    # Thread-safe queue shared between .NET event callbacks and the UI thread
+    $queue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName               = $Exe
@@ -251,22 +254,40 @@ function Invoke-Setup([string]$Exe, [string]$CmdArgs) {
 
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
+
+    # Register async output handlers; MessageData carries the queue into the callback
+    $outJob = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived `
+        -MessageData $queue -Action {
+            if ($null -ne $Event.SourceEventArgs.Data) {
+                $Event.MessageData.Enqueue($Event.SourceEventArgs.Data)
+            }
+        }
+    $errJob = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived `
+        -MessageData $queue -Action {
+            if ($null -ne $Event.SourceEventArgs.Data) {
+                $Event.MessageData.Enqueue("[!] " + $Event.SourceEventArgs.Data)
+            }
+        }
+
     $proc.Start() | Out-Null
+    $proc.BeginOutputReadLine()
+    $proc.BeginErrorReadLine()
 
-    $stdout = $proc.StandardOutput
-    $stderr = $proc.StandardError
-
+    # Drain queue every 100ms -- never blocks, UI stays responsive
     while (-not $proc.HasExited) {
-        while ($stdout.Peek() -ge 0) { Write-Log $stdout.ReadLine() }
-        while ($stderr.Peek() -ge 0) { Write-Log ("[!] " + $stderr.ReadLine()) }
+        $line = $null
+        while ($queue.TryDequeue([ref]$line)) { Write-Log $line }
         [System.Windows.Forms.Application]::DoEvents()
-        Start-Sleep -Milliseconds 80
+        Start-Sleep -Milliseconds 100
     }
-    $proc.WaitForExit()
-    $rest = $stdout.ReadToEnd()
-    if ($rest) { $rest.Split("`n") | ForEach-Object { Write-Log $_.TrimEnd("`r") } }
-    $rest = $stderr.ReadToEnd()
-    if ($rest) { $rest.Split("`n") | ForEach-Object { Write-Log ("[!] " + $_.TrimEnd("`r")) } }
+    $proc.WaitForExit()          # ensures all OutputDataReceived events have fired
+    Start-Sleep -Milliseconds 200
+    $line = $null
+    while ($queue.TryDequeue([ref]$line)) { Write-Log $line }
+
+    Unregister-Event -SourceIdentifier $outJob.Name -ErrorAction SilentlyContinue
+    Unregister-Event -SourceIdentifier $errJob.Name -ErrorAction SilentlyContinue
+    Remove-Job $outJob, $errJob  -ErrorAction SilentlyContinue
 
     return $proc.ExitCode
 }

@@ -368,14 +368,32 @@ class CameraReader:
         if self.cap and self.cap.isOpened():
             self.cap.release()
         import platform as _platform
-        _sys = _platform.system()
-        _backend = cv2.CAP_MSMF if _sys == 'Windows' else cv2.CAP_V4L2
-        self.cap = cv2.VideoCapture(cam_index, _backend)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        is_windows = _platform.system() == 'Windows'
+
+        if is_windows:
+            # Try DSHOW first (most compatible on Windows), fall back to auto
+            for backend in (cv2.CAP_DSHOW, cv2.CAP_ANY):
+                cap = cv2.VideoCapture(cam_index, backend)
+                if cap.isOpened():
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                    cap.set(cv2.CAP_PROP_FPS, 30)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    # Verify we actually get frames
+                    ret, _ = cap.read()
+                    if ret:
+                        self.cap = cap
+                        return
+                    cap.release()
+            self.cap = cv2.VideoCapture(cam_index)  # last resort
+        else:
+            self.cap = cv2.VideoCapture(cam_index, cv2.CAP_V4L2)
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def switch(self, cam_index):
         with self.lock:

@@ -4,6 +4,7 @@ import json
 import glob
 import time
 import threading
+import urllib.request
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import (
@@ -996,6 +997,12 @@ class NokiCam(QMainWindow):
 
         panel.addStretch()
 
+        # Check for Updates
+        update_btn = AnimatedButton("Check for Updates")
+        update_btn.setObjectName("quit")
+        update_btn.clicked.connect(self._check_for_updates)
+        panel.addWidget(update_btn)
+
         # Quit
         quit_btn = AnimatedButton("Quit")
         quit_btn.setObjectName("quit")
@@ -1151,6 +1158,79 @@ class NokiCam(QMainWindow):
         anim.setEasingCurve(QEasingCurve.OutBack)
         anim.start()
         self._preview_anim = anim
+
+    def _check_for_updates(self):
+        REPO = "Nokikuji/NokiCam"
+        FILES = ["main.py", "filters.py", "filter_pipeline.py",
+                 "gpu_detect.py", "processor.py", "virtual_cam.py"]
+        VERSION_FILE = os.path.join(SCRIPT_DIR, ".version")
+
+        from PyQt5.QtWidgets import QMessageBox, QProgressDialog
+        from PyQt5.QtCore import Qt
+
+        # Read local version (last-downloaded commit SHA)
+        local_sha = ""
+        if os.path.exists(VERSION_FILE):
+            with open(VERSION_FILE) as f:
+                local_sha = f.read().strip()
+
+        try:
+            api_url = f"https://api.github.com/repos/{REPO}/commits/main"
+            req = urllib.request.Request(api_url, headers={"User-Agent": "NokiCam"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            remote_sha = data["sha"]
+        except Exception as e:
+            QMessageBox.warning(self, "Update Check Failed",
+                                f"Could not reach GitHub:\n{e}")
+            return
+
+        if remote_sha == local_sha:
+            QMessageBox.information(self, "Up to Date",
+                                    "NokiCam is already up to date.")
+            return
+
+        reply = QMessageBox.question(
+            self, "Update Available",
+            "A new version of NokiCam is available.\nDownload and install now?",
+            QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        prog = QProgressDialog("Downloading updates…", None, 0, len(FILES), self)
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setWindowTitle("Updating NokiCam")
+        prog.show()
+
+        base_url = f"https://raw.githubusercontent.com/{REPO}/main/"
+        errors = []
+        for i, fname in enumerate(FILES):
+            prog.setValue(i)
+            prog.setLabelText(f"Downloading {fname}…")
+            QApplication.processEvents()
+            try:
+                url = base_url + fname
+                dest = os.path.join(SCRIPT_DIR, fname)
+                req = urllib.request.Request(url, headers={"User-Agent": "NokiCam"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    with open(dest, "wb") as out:
+                        out.write(resp.read())
+            except Exception as e:
+                errors.append(f"{fname}: {e}")
+
+        prog.setValue(len(FILES))
+
+        # Save new version
+        with open(VERSION_FILE, "w") as f:
+            f.write(remote_sha)
+
+        if errors:
+            QMessageBox.warning(self, "Update Partial",
+                                "Some files failed to download:\n" + "\n".join(errors) +
+                                "\n\nPlease restart NokiCam.")
+        else:
+            QMessageBox.information(self, "Update Complete",
+                                    "NokiCam has been updated.\nPlease restart the app.")
 
     def closeEvent(self, event):
         save_settings(

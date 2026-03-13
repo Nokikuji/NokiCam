@@ -259,6 +259,7 @@ class VirtualCamera:
                     height=self._height,
                     fps=self._fps,
                     backend=backend,
+                    camera_name="NokiCam",
                 )
                 self._active = True
                 self._device_name = f"pyvirtualcam/{backend}"

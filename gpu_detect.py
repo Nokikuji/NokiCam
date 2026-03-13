@@ -196,62 +196,92 @@ def _detect_via_drm() -> tuple[Optional[str], Optional[str]]:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _detect_via_wmic() -> tuple[Optional[str], Optional[str]]:
+    """Windows: use wmic to get GPU vendor and name."""
+    try:
+        result = subprocess.run(
+            ["wmic", "path", "win32_VideoController", "get", "Name,AdapterCompatibility"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None, None
+        vendor_keywords = {"NVIDIA": "NVIDIA", "AMD": "AMD", "Advanced Micro Devices": "AMD",
+                           "Intel": "Intel"}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line or line.lower().startswith("adaptercampatibility") or line.lower().startswith("name"):
+                continue
+            for keyword, vendor in vendor_keywords.items():
+                if keyword in line:
+                    return vendor, line
+        return None, None
+    except Exception:
+        return None, None
+
+
 def detect_gpu() -> GpuInfo:
     """
     Probe available hardware and return a populated GpuInfo.
 
     Detection order (fastest / most reliable first):
-    1. NVIDIA proc filesystem  → confirms NVIDIA + gives model name
-    2. lspci                   → vendor + model for any GPU
-    3. /sys/class/drm          → vendor fallback (no model)
-    4. OpenCV CUDA             → confirms CUDA support
-    5. OpenCV OpenCL           → confirms OpenCL support + version
+    Windows: wmic, then OpenCV OpenCL/CUDA
+    Linux:   NVIDIA proc, lspci, /sys/class/drm, then OpenCV OpenCL/CUDA
     """
     info = GpuInfo()
     cv2 = _try_import_cv2()
+    is_windows = sys.platform == "win32"
+
+    if is_windows:
+        # ------------------------------------------------------------------
+        # Windows: wmic
+        # ------------------------------------------------------------------
+        wmic_vendor, wmic_name = _detect_via_wmic()
+        if wmic_vendor:
+            info.vendor = wmic_vendor
+        if wmic_name and info.name == "CPU-only":
+            info.name = wmic_name
+    else:
+        # ------------------------------------------------------------------
+        # Linux Step 1: NVIDIA /proc
+        # ------------------------------------------------------------------
+        nvidia_model = _detect_nvidia_proc()
+        if nvidia_model:
+            info.vendor = "NVIDIA"
+            info.name = nvidia_model
+
+        # ------------------------------------------------------------------
+        # Linux Step 2: lspci
+        # ------------------------------------------------------------------
+        if info.vendor == "Unknown":
+            lspci_vendor, lspci_name = _detect_via_lspci()
+            if lspci_vendor:
+                info.vendor = lspci_vendor
+            if lspci_name and info.name == "CPU-only":
+                info.name = lspci_name
+
+        # ------------------------------------------------------------------
+        # Linux Step 3: /sys/class/drm (vendor only, last resort for name)
+        # ------------------------------------------------------------------
+        if info.vendor == "Unknown":
+            drm_vendor, _ = _detect_via_drm()
+            if drm_vendor:
+                info.vendor = drm_vendor
 
     # ------------------------------------------------------------------
-    # Step 1: NVIDIA /proc
-    # ------------------------------------------------------------------
-    nvidia_model = _detect_nvidia_proc()
-    if nvidia_model:
-        info.vendor = "NVIDIA"
-        info.name = nvidia_model
-
-    # ------------------------------------------------------------------
-    # Step 2: lspci
-    # ------------------------------------------------------------------
-    if info.vendor == "Unknown":
-        lspci_vendor, lspci_name = _detect_via_lspci()
-        if lspci_vendor:
-            info.vendor = lspci_vendor
-        if lspci_name and info.name == "CPU-only":
-            info.name = lspci_name
-
-    # ------------------------------------------------------------------
-    # Step 3: /sys/class/drm (vendor only, last resort for name)
-    # ------------------------------------------------------------------
-    if info.vendor == "Unknown":
-        drm_vendor, _ = _detect_via_drm()
-        if drm_vendor:
-            info.vendor = drm_vendor
-
-    # ------------------------------------------------------------------
-    # Step 4: OpenCV CUDA
+    # Step 4: OpenCV CUDA (all platforms)
     # ------------------------------------------------------------------
     if cv2 is not None:
         has_cuda, _cuda_count = _detect_via_cuda(cv2)
         info.has_cuda = has_cuda
 
     # ------------------------------------------------------------------
-    # Step 5: OpenCV OpenCL
+    # Step 5: OpenCV OpenCL (all platforms)
     # ------------------------------------------------------------------
     if cv2 is not None:
         has_opencl, opencl_ver = _detect_via_opencl(cv2)
         info.has_opencl = has_opencl
         info.opencl_version = opencl_ver
 
-        # Try to fill name from OpenCL device if still unknown
         if info.name == "CPU-only":
             ocl_name = _opencl_device_name(cv2)
             if ocl_name:
@@ -267,7 +297,6 @@ def detect_gpu() -> GpuInfo:
     else:
         info.backend = "cpu"
 
-    # If we found *any* GPU info but name is still default, use vendor
     if info.name == "CPU-only" and info.vendor not in ("Unknown", ""):
         info.name = f"{info.vendor} GPU (model unknown)"
 

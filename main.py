@@ -366,7 +366,9 @@ class CameraReader:
     def _open(self, cam_index, w, h):
         if self.cap and self.cap.isOpened():
             self.cap.release()
-        _backend = cv2.CAP_DSHOW if __import__('platform').system() == 'Windows' else cv2.CAP_V4L2
+        import platform as _platform
+        _sys = _platform.system()
+        _backend = cv2.CAP_MSMF if _sys == 'Windows' else cv2.CAP_V4L2
         self.cap = cv2.VideoCapture(cam_index, _backend)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
@@ -459,9 +461,13 @@ class ProcessWorker(QThread):
         map1, map2 = build_undistort_maps(
             (self.w, self.h), self.camera_matrix, modified, self.zoom
         )
-        # Upload remap LUTs to GPU (OpenCL) so cv2.remap runs on GPU
-        self.map1 = cv2.UMat(map1)
-        self.map2 = cv2.UMat(map2)
+        # Upload to GPU only if OpenCL is actually active; otherwise stay on CPU
+        if cv2.ocl.useOpenCL():
+            self.map1 = cv2.UMat(map1)
+            self.map2 = cv2.UMat(map2)
+        else:
+            self.map1 = map1
+            self.map2 = map2
         self._maps_dirty = False
 
     def run(self):
@@ -478,13 +484,12 @@ class ProcessWorker(QThread):
             if self._maps_dirty:
                 self._rebuild_maps()
 
-            # ── GPU: upload + remap on OpenCL ───────────────────────────────
-            gpu_frame = cv2.UMat(frame)
-            gpu_undistorted = cv2.remap(gpu_frame, self.map1, self.map2,
-                                        cv2.INTER_LINEAR)
-
-            # ── Background effect runs at full res (segmentation needs it) ──
-            cpu_full = gpu_undistorted.get()
+            # ── Remap: GPU (OpenCL UMat) or CPU numpy depending on hardware ──
+            if cv2.ocl.useOpenCL():
+                src = cv2.UMat(frame)
+                cpu_full = cv2.remap(src, self.map1, self.map2, cv2.INTER_LINEAR).get()
+            else:
+                cpu_full = cv2.remap(frame, self.map1, self.map2, cv2.INTER_LINEAR)
             cpu_full = self.bg_processor.process(cpu_full)
 
             # ── Downscale BEFORE filters — filters run at preview res (4× faster) ──

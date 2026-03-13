@@ -358,6 +358,8 @@ class CameraReader:
         self.frame = None
         self.lock = threading.Lock()
         self._running = True
+        self._has_new = False
+        self._event = threading.Event()
         self._open(cam_index, w, h)
         self.w = w
         self.h = h
@@ -399,12 +401,19 @@ class CameraReader:
         with self.lock:
             self._pending_switch = cam_index
 
-    def grab(self):
+    def grab(self, timeout=0.1):
+        """Block until a new frame arrives. Returns None on timeout."""
+        self._event.wait(timeout)
         with self.lock:
+            if not self._has_new:
+                return None
+            self._has_new = False
+            self._event.clear()
             return self.frame
 
     def stop(self):
         self._running = False
+        self._event.set()  # unblock any waiting grab()
 
     def _loop(self):
         self._pending_switch = None
@@ -417,12 +426,16 @@ class CameraReader:
                 self._open(pending, self.w, self.h)
                 with self.lock:
                     self.frame = None
+                    self._has_new = False
+                self._event.clear()
 
             if self.cap and self.cap.isOpened():
                 ret, frame = self.cap.read()
                 if ret:
                     with self.lock:
                         self.frame = frame
+                        self._has_new = True
+                    self._event.set()
             else:
                 time.sleep(0.01)
         if self.cap:
@@ -492,7 +505,6 @@ class ProcessWorker(QThread):
         while self._running:
             frame = self.reader.grab()
             if frame is None:
-                time.sleep(0.002)
                 continue
 
             if self._maps_dirty:

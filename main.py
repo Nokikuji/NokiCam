@@ -431,7 +431,7 @@ class CameraReader:
 
 # ── Processing worker ────────────────────────────────────────────────────────
 class ProcessWorker(QThread):
-    frame_ready = pyqtSignal(np.ndarray, np.ndarray)
+    frame_ready = pyqtSignal(np.ndarray)
     fps_update = pyqtSignal(int)
 
     def __init__(self, reader, frame_size, camera_matrix, dist_coeffs, zoom, k1):
@@ -526,7 +526,15 @@ class ProcessWorker(QThread):
             else:
                 full_rgb = cv2.cvtColor(cpu_full, cv2.COLOR_BGR2RGB)
 
-            self.frame_ready.emit(preview_rgb, full_rgb)
+            # Send to virtual cam on worker thread to avoid blocking GUI
+            vcam = getattr(self, 'vcam', None)
+            if vcam and vcam.is_active:
+                try:
+                    vcam.send(full_rgb)
+                except Exception:
+                    pass
+
+            self.frame_ready.emit(preview_rgb)
 
             frame_count += 1
             elapsed = time.monotonic() - t0
@@ -789,6 +797,7 @@ class NokiCam(QMainWindow):
         )
         self.worker.frame_ready.connect(self._on_frame)
         self.worker.fps_update.connect(self._on_fps)
+        self.worker.vcam = self.vcam
         self.worker.start()
 
         # Apply saved background settings
@@ -1134,14 +1143,8 @@ class NokiCam(QMainWindow):
         else:
             self.worker.load_bg_image(path)
 
-    @pyqtSlot(np.ndarray, np.ndarray)
-    def _on_frame(self, preview_rgb, full_rgb):
-        if self.vcam:
-            try:
-                self.vcam.send(full_rgb)
-            except Exception:
-                pass
-
+    @pyqtSlot(np.ndarray)
+    def _on_frame(self, preview_rgb):
         h, w, ch = preview_rgb.shape
         img = QImage(preview_rgb.data, w, h, ch * w, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(img)

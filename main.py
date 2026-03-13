@@ -480,13 +480,8 @@ class ProcessWorker(QThread):
         map1, map2 = build_undistort_maps(
             (self.w, self.h), self.camera_matrix, modified, self.zoom
         )
-        # Upload to GPU only if OpenCL is actually active; otherwise stay on CPU
-        if cv2.ocl.useOpenCL():
-            self.map1 = cv2.UMat(map1)
-            self.map2 = cv2.UMat(map2)
-        else:
-            self.map1 = map1
-            self.map2 = map2
+        self.map1 = map1
+        self.map2 = map2
         self._maps_dirty = False
 
     def run(self):
@@ -503,17 +498,16 @@ class ProcessWorker(QThread):
             if self._maps_dirty:
                 self._rebuild_maps()
 
-            # ── Remap: GPU (OpenCL UMat) or CPU numpy depending on hardware ──
-            if cv2.ocl.useOpenCL():
-                src = cv2.UMat(frame)
-                cpu_full = cv2.remap(src, self.map1, self.map2, cv2.INTER_LINEAR).get()
-            else:
-                cpu_full = cv2.remap(frame, self.map1, self.map2, cv2.INTER_LINEAR)
-            cpu_full = self.bg_processor.process(cpu_full)
+            # ── Remap (always CPU — UMat upload/download overhead exceeds benefit) ──
+            cpu_full = cv2.remap(frame, self.map1, self.map2, cv2.INTER_LINEAR)
 
-            # ── Downscale BEFORE filters — filters run at preview res (4× faster) ──
+            # ── Downscale BEFORE bg/filters — all effects run at 960×540 (4× faster) ──
             small_bgr = cv2.resize(cpu_full, (self.preview_w, self.preview_h),
                                    interpolation=cv2.INTER_AREA)
+
+            # ── Background segmentation at preview resolution ─────────────────
+            if self.bg_processor.mode != self.bg_processor.MODE_OFF:
+                small_bgr = self.bg_processor.process(small_bgr)
 
             # ── Filters run at preview resolution (960×540) ──────────────────
             filtered = self.filter_pipeline.process(small_bgr)
@@ -521,9 +515,10 @@ class ProcessWorker(QThread):
             # ── Convert for Qt preview ───────────────────────────────────────
             preview_rgb = cv2.cvtColor(filtered, cv2.COLOR_BGR2RGB)
 
-            # ── Virtual cam needs full-res RGB — upscale if vcam is active ──
-            # (reuse cpu_full if no filters active, else upscale filtered)
-            if self.filter_pipeline.active_filters:
+            # ── Virtual cam: upscale processed preview or use raw full-res ───
+            needs_upscale = (self.filter_pipeline.active_filters
+                             or self.bg_processor.mode != self.bg_processor.MODE_OFF)
+            if needs_upscale:
                 full_rgb = cv2.cvtColor(
                     cv2.resize(filtered, (self.w, self.h), interpolation=cv2.INTER_LINEAR),
                     cv2.COLOR_BGR2RGB

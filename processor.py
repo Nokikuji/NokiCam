@@ -78,6 +78,8 @@ class BackgroundProcessor:
         self.threshold = 0.6       # segmentation confidence threshold
         self.invert_mask = False   # False = replace background, True = replace person
         self._timestamp_ms = 0
+        self._last_mask = None     # cached mask for frame-skip
+        self._seg_frame_count = 0
 
     def _init_segmenter(self):
         """Initialize the MediaPipe image segmenter (Tasks API)."""
@@ -145,23 +147,38 @@ class BackgroundProcessor:
 
         h, w = frame_bgr.shape[:2]
 
-        # Run segmentation (MediaPipe Tasks API expects RGB)
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        self._timestamp_ms += 33  # ~30fps
-        result = self._segmenter.segment_for_video(mp_image, self._timestamp_ms)
+        # Run segmentation every other frame; reuse cached mask in between.
+        # MediaPipe internally runs at ~256px, so full-res input gives no quality
+        # benefit — only latency. Skipping alternating frames halves segmentation cost.
+        self._seg_frame_count += 1
+        run_seg = (
+            self._seg_frame_count % 2 == 1
+            or self._last_mask is None
+            or self._last_mask.shape[:2] != (h, w)
+        )
 
-        # category_mask: 0 = person, 255 = background (selfie segmenter)
-        cat_mask = result.category_mask.numpy_view()
-        # mask: 1.0 = person (keep), 0.0 = background (replace)
-        mask = (cat_mask == 0).astype(np.float32)
+        if run_seg:
+            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            self._timestamp_ms += 33  # ~30fps
+            result = self._segmenter.segment_for_video(mp_image, self._timestamp_ms)
 
-        if self.invert_mask:
-            mask = 1.0 - mask
+            # category_mask: 0 = person, 255 = background
+            cat_mask = result.category_mask.numpy_view()
+            mask = (cat_mask == 0).astype(np.float32)
 
-        # Smooth edges
-        mask = cv2.GaussianBlur(mask, (7, 7), 3)
-        mask_3ch = mask[:, :, np.newaxis]
+            if self.invert_mask:
+                mask = 1.0 - mask
+
+            # Resize mask if MediaPipe output differs from frame size
+            if mask.shape[:2] != (h, w):
+                mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
+
+            # Smooth edges
+            mask = cv2.GaussianBlur(mask, (7, 7), 3)
+            self._last_mask = mask
+        else:
+            mask = self._last_mask
 
         # Build background
         if self.mode == self.MODE_BLUR:
@@ -187,7 +204,10 @@ class BackgroundProcessor:
         else:
             return frame_bgr
 
-        # Composite: person * mask + background * (1 - mask)
-        composite = (frame_bgr.astype(np.float32) * mask_3ch +
-                     bg.astype(np.float32) * (1.0 - mask_3ch))
-        return composite.astype(np.uint8)
+        # Composite using uint16 — avoids float32 allocations (2× less memory bandwidth).
+        # alpha + (255 - alpha) = 255, so max value = 255*255 = 65025 < 65535 (safe).
+        alpha = np.clip(mask * 255, 0, 255).astype(np.uint16)[:, :, np.newaxis]
+        return (
+            (frame_bgr.astype(np.uint16) * alpha
+             + bg.astype(np.uint16) * (255 - alpha)) >> 8
+        ).astype(np.uint8)

@@ -366,7 +366,8 @@ class CameraReader:
     def _open(self, cam_index, w, h):
         if self.cap and self.cap.isOpened():
             self.cap.release()
-        self.cap = cv2.VideoCapture(cam_index, cv2.CAP_V4L2)
+        _backend = cv2.CAP_DSHOW if __import__('platform').system() == 'Windows' else cv2.CAP_V4L2
+        self.cap = cv2.VideoCapture(cam_index, _backend)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)

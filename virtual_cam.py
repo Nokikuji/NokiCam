@@ -250,28 +250,25 @@ class VirtualCamera:
             )
 
     def _open_windows(self, pyvirtualcam) -> None:
+        # Only mediafoundation supports camera_name; unitycapture and obs do not.
         backends = ["mediafoundation", "unitycapture", "obs"]
         for backend in backends:
             _log(f"Windows: trying pyvirtualcam backend='{backend}' …")
-            # Try with camera_name first (pyvirtualcam >= 0.9); fall back without
-            for kwargs in ({"camera_name": "NokiCam"}, {}):
-                try:
-                    self._vcam = pyvirtualcam.Camera(
-                        width=self._width,
-                        height=self._height,
-                        fps=self._fps,
-                        backend=backend,
-                        **kwargs,
-                    )
-                    self._active = True
-                    self._device_name = f"pyvirtualcam/{backend}"
-                    _log(f"Virtual camera active: {self._device_name}")
-                    return
-                except TypeError:
-                    continue  # camera_name not supported, retry without
-                except Exception as exc:
-                    _log(f"  backend='{backend}' unavailable: {exc}")
-                    break  # backend itself failed, try next one
+            kwargs = {"camera_name": "NokiCam"} if backend == "mediafoundation" else {}
+            try:
+                self._vcam = pyvirtualcam.Camera(
+                    width=self._width,
+                    height=self._height,
+                    fps=self._fps,
+                    backend=backend,
+                    **kwargs,
+                )
+                self._active = True
+                self._device_name = f"pyvirtualcam/{backend}"
+                _log(f"Virtual camera active: {self._device_name}")
+                return
+            except Exception as exc:
+                _log(f"  backend='{backend}' unavailable: {exc}")
 
         _log("No Windows virtual camera backend succeeded — display-only mode.")
 

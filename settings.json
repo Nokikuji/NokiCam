@@ -3,8 +3,8 @@
   "dist": 15,
   "cam_index": 0,
   "autostart": false,
-  "bg_mode": 2,
-  "bg_blur": 21,
+  "bg_mode": 1,
+  "bg_blur": 53,
   "bg_file": "/home/nokikuji/Pictures/caidenSelfie.jpg",
-  "bg_invert": true
+  "bg_invert": false
 }

@@ -7,7 +7,7 @@ Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
-$ScriptDir    = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$ScriptDir    = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
 $VenvDir      = Join-Path $ScriptDir ".venv"
 $VenvPy       = Join-Path $VenvDir "Scripts\python.exe"
 $script:PythonExe   = ""

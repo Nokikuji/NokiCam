@@ -13,10 +13,7 @@ import cv2
 import numpy as np
 from datetime import datetime
 
-# ---------------------------------------------------------------------------
-# GPU / OpenCL
-# ---------------------------------------------------------------------------
-cv2.ocl.setUseOpenCL(True)  # use GPU via OpenCL for eligible operations
+# NOTE: Do not set cv2.ocl here — gpu_detect in main.py configures it globally.
 
 # ---------------------------------------------------------------------------
 # Module-level shared resources

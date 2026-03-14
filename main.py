@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal, pyqtSlot, QPropertyAnimation,
-    QEasingCurve, QSize, QRect, pyqtProperty,
+    QEasingCurve, QSize, QRect, pyqtProperty, QTimer,
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QPen
 from virtual_cam import VirtualCamera
@@ -380,7 +380,7 @@ class CameraReader:
                     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-                    cap.set(cv2.CAP_PROP_FPS, 30)
+                    cap.set(cv2.CAP_PROP_FPS, 60)
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     # Verify we actually get frames
                     ret, _ = cap.read()
@@ -394,7 +394,7 @@ class CameraReader:
             self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self.cap.set(cv2.CAP_PROP_FPS, 60)
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def switch(self, cam_index):
@@ -444,7 +444,6 @@ class CameraReader:
 
 # ── Processing worker ────────────────────────────────────────────────────────
 class ProcessWorker(QThread):
-    frame_ready = pyqtSignal(np.ndarray)
     fps_update = pyqtSignal(int)
 
     def __init__(self, reader, frame_size, camera_matrix, dist_coeffs, zoom, k1):
@@ -463,6 +462,16 @@ class ProcessWorker(QThread):
         self.preview_h = 540
         self.bg_processor = BackgroundProcessor()
         self.filter_pipeline = FilterPipeline()
+        # Shared buffer for GUI — no signal queue, GUI polls at display refresh
+        self._preview_lock = threading.Lock()
+        self._latest_preview = None
+
+    def get_latest_preview(self):
+        """Called from GUI timer. Returns latest frame or None if no new frame."""
+        with self._preview_lock:
+            frame = self._latest_preview
+            self._latest_preview = None
+            return frame
 
     def update_zoom(self, zoom):
         self.zoom = zoom
@@ -527,26 +536,25 @@ class ProcessWorker(QThread):
             # ── Convert for Qt preview ───────────────────────────────────────
             preview_rgb = cv2.cvtColor(filtered, cv2.COLOR_BGR2RGB)
 
-            # ── Virtual cam: upscale processed preview or use raw full-res ───
-            needs_upscale = (self.filter_pipeline.active_filters
-                             or self.bg_processor.mode != self.bg_processor.MODE_OFF)
-            if needs_upscale:
-                full_rgb = cv2.cvtColor(
-                    cv2.resize(filtered, (self.w, self.h), interpolation=cv2.INTER_LINEAR),
-                    cv2.COLOR_BGR2RGB
-                )
-            else:
-                full_rgb = cv2.cvtColor(cpu_full, cv2.COLOR_BGR2RGB)
-
-            # Send to virtual cam on worker thread to avoid blocking GUI
+            # ── Virtual cam (only compute full-res RGB when actually needed) ──
             vcam = getattr(self, 'vcam', None)
             if vcam and vcam.is_active:
+                needs_upscale = (self.filter_pipeline.active_filters
+                                 or self.bg_processor.mode != self.bg_processor.MODE_OFF)
+                if needs_upscale:
+                    full_rgb = cv2.cvtColor(
+                        cv2.resize(filtered, (self.w, self.h),
+                                   interpolation=cv2.INTER_LINEAR),
+                        cv2.COLOR_BGR2RGB)
+                else:
+                    full_rgb = cv2.cvtColor(cpu_full, cv2.COLOR_BGR2RGB)
                 try:
                     vcam.send(full_rgb)
                 except Exception:
                     pass
 
-            self.frame_ready.emit(preview_rgb)
+            with self._preview_lock:
+                self._latest_preview = preview_rgb
 
             frame_count += 1
             elapsed = time.monotonic() - t0
@@ -807,10 +815,14 @@ class NokiCam(QMainWindow):
             self.reader, self.frame_size, self.camera_matrix, self.dist_coeffs,
             self.current_zoom, self.current_k1,
         )
-        self.worker.frame_ready.connect(self._on_frame)
         self.worker.fps_update.connect(self._on_fps)
         self.worker.vcam = self.vcam
         self.worker.start()
+
+        # Poll for new frames at ~60fps — avoids Qt signal queue backup
+        self._display_timer = QTimer()
+        self._display_timer.timeout.connect(self._poll_frame)
+        self._display_timer.start(16)
 
         # Apply saved background settings
         saved_bg_mode = self.settings.get("bg_mode", 0)
@@ -1155,7 +1167,11 @@ class NokiCam(QMainWindow):
         else:
             self.worker.load_bg_image(path)
 
-    @pyqtSlot(np.ndarray)
+    def _poll_frame(self):
+        frame = self.worker.get_latest_preview()
+        if frame is not None:
+            self._on_frame(frame)
+
     def _on_frame(self, preview_rgb):
         h, w, ch = preview_rgb.shape
         img = QImage(preview_rgb.data, w, h, ch * w, QImage.Format_RGB888)
@@ -1271,6 +1287,7 @@ class NokiCam(QMainWindow):
             bg_file=self._bg_file_path,
             bg_invert=self.invert_toggle.isChecked(),
         )
+        self._display_timer.stop()
         self.worker.stop()
         self.reader.stop()
         self.worker.wait(2000)

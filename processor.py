@@ -7,10 +7,8 @@ from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision
 from PIL import Image as PILImage
 
-# Use all CPU threads and SIMD; OpenCL is enabled by gpu_detect at startup
-cv2.setNumThreads(0)
-cv2.setUseOptimized(True)
-cv2.ocl.setUseOpenCL(True)
+# NOTE: Do not set cv2.ocl / cv2.setNumThreads here — gpu_detect in main.py
+# configures these globally at startup. Module-level overrides would undo that.
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(SCRIPT_DIR, "selfie_segmenter.tflite")
